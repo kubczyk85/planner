@@ -402,14 +402,19 @@ function renderTopbar(stats){
       <button class="vbtn ${ST.tab==='all'?'act':''}" data-tab="all">Wszyscy</button>
       ${SONS.map(s=>`<button class="vbtn ${ST.tab===s.id?'act':''}" data-tab="${s.id}" style="${ST.tab===s.id?'border-color:'+s.color+';color:'+s.color:''}">${s.name}</button>`).join('')}
       <button class="vbtn rec-vbtn" id="rec-btn">+ Cykliczne</button>
+      <button class="vbtn" id="wakelock-btn">Ekran: wł.</button>
     </div>
   `;
   tb.querySelector('#pm')?.addEventListener('click',()=>{ST.m--;if(ST.m<0){ST.m=11;ST.y--;}load();render();});
   tb.querySelector('#nm')?.addEventListener('click',()=>{ST.m++;if(ST.m>11){ST.m=0;ST.y++;}load();render();});
   tb.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{ST.tab=b.dataset.tab;render();}));
-  tb.querySelector('#rec-btn')?.addEventListener('click',()=>{ST.recSheet=true;selDays=[];renderRecSheet();});
+  tb.querySelector('#rec-btn')?.addEventListener('click',()=>{ST.recSheet=true;renderRecSheet();});
+  tb.querySelector('#wakelock-btn')?.addEventListener('click',()=>{
+    if(wakeLockEnabled)releaseWakeLock();else requestWakeLock();
+  });
   tb.querySelector('#do-install')?.addEventListener('click',()=>{if(deferredPrompt){deferredPrompt.prompt();deferredPrompt.userChoice.then(()=>{deferredPrompt=null;ST.showInstall=false;render();})}});
   tb.querySelector('#close-install')?.addEventListener('click',()=>{ST.showInstall=false;render();});
+  updateWakeLockBtn();
 }
 
 function renderScroll(stats){
@@ -827,7 +832,43 @@ if('serviceWorker' in navigator){
   navigator.serviceWorker.register('./sw.js').catch(()=>{});
 }
 
+// ── Wake Lock — keeps screen on ──
+let wakeLock=null;
+let wakeLockEnabled=false;
+
+async function requestWakeLock(){
+  if(!('wakeLock' in navigator))return;
+  try{
+    wakeLock=await navigator.wakeLock.request('screen');
+    wakeLockEnabled=true;
+    updateWakeLockBtn();
+    wakeLock.addEventListener('release',()=>{
+      if(wakeLockEnabled)requestWakeLock();
+    });
+  }catch(e){wakeLockEnabled=false;updateWakeLockBtn();}
+}
+
+async function releaseWakeLock(){
+  if(wakeLock){try{await wakeLock.release();}catch(e){}}
+  wakeLock=null;wakeLockEnabled=false;
+  updateWakeLockBtn();
+}
+
+function updateWakeLockBtn(){
+  const btn=document.getElementById('wakelock-btn');
+  if(!btn)return;
+  btn.textContent=wakeLockEnabled?'Ekran: wł.':'Ekran: auto';
+  btn.style.borderColor=wakeLockEnabled?'#3B6D11':'var(--border2)';
+  btn.style.color=wakeLockEnabled?'#3B6D11':'var(--text2)';
+  btn.style.background=wakeLockEnabled?'#EAF3DE':'transparent';
+}
+
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible'&&wakeLockEnabled)requestWakeLock();
+});
+
 render();
+requestWakeLock();
 </script>
 </body>
 </html>
