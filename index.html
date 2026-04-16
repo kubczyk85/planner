@@ -286,11 +286,9 @@ let ST={
   tasks:{},recTasks:[],
   view:'month',tab:'all',
   sheet:null,recSheet:false,
-  selPrio:'normal',selRecType:'month',
   showInstall:true
 };
 let deferredPrompt=null;
-let selDays=[];
 
 const lsK=()=>'planner3_'+ST.y+'_'+ST.m;
 const lsRK=()=>'planner3_rec_'+ST.y+'_'+ST.m;
@@ -340,11 +338,11 @@ function deleteManualTask(dateStr,task){
   const arr=ST.tasks[dateStr]||[];
   const idx=arr.findIndex(t=>t.son===task.son&&t.name===task.name);
   if(idx>=0){arr.splice(idx,1);if(!arr.length)delete ST.tasks[dateStr];else ST.tasks[dateStr]=arr;}
-  save();render();
+  save();
 }
 function addTask(dateStr,t){if(!ST.tasks[dateStr])ST.tasks[dateStr]=[];ST.tasks[dateStr].push(t);save();}
 function addRec(t){if(!ST.recTasks)ST.recTasks=[];ST.recTasks.push(t);save();}
-function deleteRec(id){ST.recTasks=ST.recTasks.filter(r=>r.id!==id);save();render();}
+function deleteRec(id){ST.recTasks=ST.recTasks.filter(r=>r.id!==id);save();}
 
 function calcStats(){
   const D=dim(ST.y,ST.m);const res={};
@@ -450,7 +448,8 @@ function buildMonth(){
   for(let d=1;d<=D;d++){
     const dstr=ds(ST.y,ST.m,d);const isT=dstr===td;const we=isWE(ST.y,ST.m,d);
     const tasks=getTasks(dstr);
-    const fil=ST.tab==='all'?tasks:tasks.filter(t=>t.son===ST.tab);
+    const fil=(ST.tab==='all'?tasks:tasks.filter(t=>t.son===ST.tab))
+      .slice().sort((a,b)=>SONS.findIndex(s=>s.id===a.son)-SONS.findIndex(s=>s.id===b.son));
     const vis=fil.slice(0,3);const extra=fil.length-3;
     cells+=`<div class="day-cell${isT?' today':''}${we?' weekend-bg':''}" data-date="${dstr}">
       <div class="day-num">${d}${we?'<span class="we-tag">W</span>':''}</div>
@@ -566,6 +565,48 @@ function attachScrollEv(sa){
   }));
 }
 
+function buildTaskList(date,fil){
+  const sorted=fil.slice().sort((a,b)=>SONS.findIndex(s=>s.id===a.son)-SONS.findIndex(s=>s.id===b.son));
+  if(sorted.length===0)return`<div style="color:var(--text3);font-size:13px;padding:8px 0">Brak zadań. Dodaj pierwsze!</div>`;
+  return sorted.map(t=>{
+    const s=sonById(t.son);const c=catById(t.category);
+    return `<div class="task-row${t.done?' done-r':''}">
+      <input type="checkbox" ${t.done?'checked':''} class="tchk"
+        data-date="${date}" data-son="${t.son}" data-name="${t.name}"
+        data-isrec="${t.isRec?1:0}" data-recid="${t.id||''}">
+      <div class="tri">
+        <div class="trn" style="color:${t.done?'var(--text3)':s.color}">${t.priority==='high'?'&#9733; ':''}${t.name}${t.isRec?' &#8635;':''}</div>
+        <div class="trm"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${s.color};margin-right:4px;vertical-align:middle"></span>${s.name} · ${c.l}${t.isRec?' · Cykliczne':''}</div>
+      </div>
+      ${!t.isRec?`<button class="delbtn dtsk" data-date="${date}" data-son="${t.son}" data-name="${t.name}">&#215;</button>`:''}
+    </div>`;
+  }).join('');
+}
+
+function refreshTaskList(el,date){
+  load();
+  const tasks=getTasks(date);
+  const fil=ST.tab==='all'?tasks:tasks.filter(t=>t.son===ST.tab);
+  const tl=el.querySelector('#task-list');
+  if(tl)tl.innerHTML=buildTaskList(date,fil);
+  attachTaskListEv(el,date);
+}
+
+function attachTaskListEv(el,date){
+  el.querySelectorAll('.tchk').forEach(cb=>cb.addEventListener('change',()=>{
+    const isRec=cb.dataset.isrec==='1';
+    if(isRec){const rt=(ST.recTasks||[]).find(r=>r.id===cb.dataset.recid);if(rt)toggleTask(cb.dataset.date,{...rt,isRec:true,done:!cb.checked});}
+    else{const arr=ST.tasks[cb.dataset.date]||[];const t=arr.find(t=>t.son===cb.dataset.son&&t.name===cb.dataset.name&&!t.isRec);if(t){t.done=!t.done;save();}}
+    refreshTaskList(el,date);
+    renderTopbar(calcStats());
+  }));
+  el.querySelectorAll('.dtsk').forEach(b=>b.addEventListener('click',e=>{
+    e.stopPropagation();
+    const arr=ST.tasks[b.dataset.date]||[];const t=arr.find(t=>t.son===b.dataset.son&&t.name===b.dataset.name);
+    if(t){deleteManualTask(b.dataset.date,t);refreshTaskList(el,date);renderTopbar(calcStats());}
+  }));
+}
+
 function renderSheet(){
   let el=document.getElementById('sheet-container');
   if(!el){el=document.createElement('div');el.id='sheet-container';document.body.appendChild(el);}
@@ -578,22 +619,7 @@ function renderSheet(){
       <div class="sheet-handle"></div>
       <button class="sheet-close" id="sclose">&#215;</button>
       <h3>${dlbl}, ${dayN} ${MPL[ST.m]}</h3>
-      <div id="task-list">
-        ${fil.length===0?`<div style="color:var(--text3);font-size:13px;padding:8px 0">Brak zadań. Dodaj pierwsze!</div>`:''}
-        ${fil.map(t=>{
-          const s=sonById(t.son);const c=catById(t.category);
-          return `<div class="task-row${t.done?' done-r':''}">
-            <input type="checkbox" ${t.done?'checked':''} class="tchk"
-              data-date="${date}" data-son="${t.son}" data-name="${t.name}"
-              data-isrec="${t.isRec?1:0}" data-recid="${t.id||''}">
-            <div class="tri">
-              <div class="trn" style="color:${t.done?'var(--text3)':s.color}">${t.priority==='high'?'&#9733; ':''}${t.name}${t.isRec?' &#8635;':''}</div>
-              <div class="trm"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${s.color};margin-right:4px;vertical-align:middle"></span>${s.name} · ${c.l}${t.isRec?' · Cykliczne':''}</div>
-            </div>
-            ${!t.isRec?`<button class="delbtn dtsk" data-date="${date}" data-son="${t.son}" data-name="${t.name}">&#215;</button>`:''}
-          </div>`;
-        }).join('')}
-      </div>
+      <div id="task-list">${buildTaskList(date,fil)}</div>
       <div class="add-form">
         <div class="form-lbl">Dodaj jednorazowe zadanie</div>
         <input type="text" id="tn" placeholder="Nazwa zadania..." maxlength="60" autocomplete="off">
@@ -603,106 +629,191 @@ function renderSheet(){
         </div>
         <div class="form-lbl">Priorytet</div>
         <div class="prow">
-          <button class="pbtn ${ST.selPrio==='normal'?'s':''}" data-prio="normal">Zwykłe</button>
-          <button class="pbtn ${ST.selPrio==='high'?'s':''}" data-prio="high">&#9733; Ważne</button>
+          <button class="pbtn s" id="prio-normal" data-prio="normal">Zwykłe</button>
+          <button class="pbtn" id="prio-high" data-prio="high">&#9733; Ważne</button>
         </div>
         <button class="abtn" id="add-task-btn">Dodaj zadanie</button>
       </div>
     </div>
   </div>`;
+
+  let currentPrio='normal';
+
   el.querySelector('#sov').addEventListener('click',e=>{if(e.target.id==='sov'){ST.sheet=null;el.innerHTML='';render();}});
   el.querySelector('#sclose').addEventListener('click',()=>{ST.sheet=null;el.innerHTML='';render();});
-  el.querySelectorAll('.tchk').forEach(cb=>cb.addEventListener('change',()=>{
-    const isRec=cb.dataset.isrec==='1';
-    if(isRec){const rt=(ST.recTasks||[]).find(r=>r.id===cb.dataset.recid);if(rt)toggleTask(cb.dataset.date,{...rt,isRec:true,done:!cb.checked});}
-    else{const arr=ST.tasks[cb.dataset.date]||[];const t=arr.find(t=>t.son===cb.dataset.son&&t.name===cb.dataset.name&&!t.isRec);if(t){t.done=!t.done;save();render();}}
-  }));
-  el.querySelectorAll('.dtsk').forEach(b=>b.addEventListener('click',e=>{
-    e.stopPropagation();
-    const arr=ST.tasks[b.dataset.date]||[];const t=arr.find(t=>t.son===b.dataset.son&&t.name===b.dataset.name);
-    if(t)deleteManualTask(b.dataset.date,t);
-  }));
-  el.querySelectorAll('[data-prio]').forEach(b=>b.addEventListener('click',()=>{ST.selPrio=b.dataset.prio;renderSheet();}));
-  el.querySelector('#add-task-btn')?.addEventListener('click',()=>{
+
+  attachTaskListEv(el,date);
+
+  el.querySelector('#prio-normal').addEventListener('click',()=>{
+    currentPrio='normal';
+    el.querySelector('#prio-normal').classList.add('s');
+    el.querySelector('#prio-high').classList.remove('s');
+  });
+  el.querySelector('#prio-high').addEventListener('click',()=>{
+    currentPrio='high';
+    el.querySelector('#prio-high').classList.add('s');
+    el.querySelector('#prio-normal').classList.remove('s');
+  });
+
+  el.querySelector('#add-task-btn').addEventListener('click',()=>{
     const name=el.querySelector('#tn').value.trim();
     const son=el.querySelector('#tson').value;
     const cat=el.querySelector('#tcat').value;
-    if(!name||!son)return;
-    addTask(ST.sheet.date,{name,son,category:cat||'other',priority:ST.selPrio,done:false});
-    ST.selPrio='normal';render();renderSheet();
+    if(!name||!son){
+      if(!name)el.querySelector('#tn').style.borderColor='#E24B4A';
+      if(!son)el.querySelector('#tson').style.borderColor='#E24B4A';
+      return;
+    }
+    addTask(date,{name,son,category:cat||'other',priority:currentPrio,done:false});
+    el.querySelector('#tn').value='';
+    el.querySelector('#tson').value='';
+    el.querySelector('#tcat').value='school';
+    el.querySelector('#tn').style.borderColor='';
+    el.querySelector('#tson').style.borderColor='';
+    currentPrio='normal';
+    el.querySelector('#prio-normal').classList.add('s');
+    el.querySelector('#prio-high').classList.remove('s');
+    refreshTaskList(el,date);
+    renderTopbar(calcStats());
+    renderScroll(calcStats());
   });
+}
+
+function buildRecList(el){
+  const recTypes=[
+    {id:'month',l:'Każdy dzień'},
+    {id:'month_noweekend',l:'Dni robocze (pon–pt)'},
+    {id:'month_weekend',l:'Tylko weekendy (sob–nie)'},
+    {id:'week',l:'Wybrane dni tygodnia'}
+  ];
+  const panel=el.querySelector('#rec-active-panel');
+  if(!panel)return;
+  if((ST.recTasks||[]).length===0){panel.innerHTML='';return;}
+  panel.innerHTML=`<div class="form-lbl" style="margin-bottom:6px">Aktywne</div>
+    <div class="rec-panel">
+      ${ST.recTasks.map(rt=>{
+        const s=sonById(rt.son);const rl=recTypes.find(r=>r.id===rt.type)||recTypes[0];
+        const dl=rt.type==='week'&&rt.days?rt.days.map(d=>DPL[d]).join(', '):'';
+        return `<div class="rec-row">
+          <span style="width:9px;height:9px;border-radius:50%;background:${s.color};flex-shrink:0;display:inline-block"></span>
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${s.color}">${rt.name}</span>
+          <span class="rec-badge">${s.name}</span>
+          <span class="rec-badge">${rl.l}${dl?' ('+dl+')':''}</span>
+          <button class="delbtn" data-recid="${rt.id}">&#215;</button>
+        </div>`;
+      }).join('')}
+    </div>`;
+  panel.querySelectorAll('.delbtn[data-recid]').forEach(b=>b.addEventListener('click',e=>{
+    e.stopPropagation();deleteRec(b.dataset.recid);buildRecList(el);renderTopbar(calcStats());renderScroll(calcStats());
+  }));
 }
 
 function renderRecSheet(){
   let el=document.getElementById('rec-sheet-container');
   if(!el){el=document.createElement('div');el.id='rec-sheet-container';document.body.appendChild(el);}
+
+  let localPrio='normal';
+  let localRecType='month';
+  let localDays=[];
+
   const recTypes=[
     {id:'month',l:'Każdy dzień'},
     {id:'month_noweekend',l:'Dni robocze\n(pon–pt)'},
     {id:'month_weekend',l:'Tylko weekendy\n(sob–nie)'},
     {id:'week',l:'Wybrane dni\ntygodnia'}
   ];
+
   el.innerHTML=`<div class="sheet-ov" id="rov">
     <div class="sheet">
       <div class="sheet-handle"></div>
       <button class="sheet-close" id="rclose">&#215;</button>
       <h3>Zadania cykliczne — ${MPL[ST.m]} ${ST.y}</h3>
-      ${(ST.recTasks||[]).length>0?`
-        <div class="form-lbl" style="margin-bottom:6px">Aktywne</div>
-        <div class="rec-panel">
-          ${ST.recTasks.map(rt=>{
-            const s=sonById(rt.son);const rl=recTypes.find(r=>r.id===rt.type)||recTypes[0];
-            const dl=rt.type==='week'&&rt.days?rt.days.map(d=>DPL[d]).join(', '):'';
-            return `<div class="rec-row">
-              <span style="width:9px;height:9px;border-radius:50%;background:${s.color};flex-shrink:0;display:inline-block"></span>
-              <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${s.color}">${rt.name}</span>
-              <span class="rec-badge">${s.name}</span>
-              <span class="rec-badge">${rl.l.replace('\n',' ')}${dl?' ('+dl+')':''}</span>
-              <button class="delbtn" data-recid="${rt.id}">&#215;</button>
-            </div>`;
-          }).join('')}
-        </div>`:''}
+      <div id="rec-active-panel"></div>
       <div class="form-lbl" style="margin-top:10px">Nowe zadanie cykliczne</div>
       <input type="text" id="rn" placeholder="Nazwa zadania..." maxlength="60" autocomplete="off" style="width:100%;margin-bottom:8px;padding:12px;border:0.5px solid var(--border2);border-radius:var(--r);font-size:15px;background:var(--bg);color:var(--text)">
       <div class="r2" style="margin-bottom:8px">
-        <select id="rson" style="padding:12px;border:0.5px solid var(--border2);border-radius:var(--r);font-size:15px;background:var(--bg);color:var(--text);-webkit-appearance:none;width:100%"><option value="">Wybierz syna</option>${SONS.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}</select>
-        <select id="rcat" style="padding:12px;border:0.5px solid var(--border2);border-radius:var(--r);font-size:15px;background:var(--bg);color:var(--text);-webkit-appearance:none;width:100%">${CATS.map(c=>`<option value="${c.id}">${c.l}</option>`).join('')}</select>
+        <select id="rson" style="padding:12px;border:0.5px solid var(--border2);border-radius:var(--r);font-size:15px;background:var(--bg);color:var(--text);-webkit-appearance:none;width:100%">
+          <option value="">Wybierz syna</option>${SONS.map(s=>`<option value="${s.id}">${s.name}</option>`).join('')}
+        </select>
+        <select id="rcat" style="padding:12px;border:0.5px solid var(--border2);border-radius:var(--r);font-size:15px;background:var(--bg);color:var(--text);-webkit-appearance:none;width:100%">
+          ${CATS.map(c=>`<option value="${c.id}">${c.l}</option>`).join('')}
+        </select>
       </div>
       <div class="form-lbl">Powtarzaj w</div>
-      <div class="rec-type-grid">
-        ${recTypes.map(r=>`<button class="rec-type-btn ${ST.selRecType===r.id?'s':''}" data-rectype="${r.id}">${r.l}</button>`).join('')}
+      <div class="rec-type-grid" id="rec-type-grid">
+        ${recTypes.map(r=>`<button class="rec-type-btn${r.id==='month'?' s':''}" data-rectype="${r.id}">${r.l}</button>`).join('')}
       </div>
-      <div id="dp" style="display:${ST.selRecType==='week'?'flex':'none'}" class="days-grid">
-        ${DPL.map((d,i)=>`<button class="day-btn${selDays.includes(i)?' s':''}" data-day="${i}">${d}</button>`).join('')}
+      <div id="days-picker" style="display:none" class="days-grid">
+        ${DPL.map((d,i)=>`<button class="day-btn" data-day="${i}">${d}</button>`).join('')}
       </div>
       <div class="form-lbl">Priorytet</div>
       <div class="prow">
-        <button class="pbtn ${ST.selPrio==='normal'?'s':''}" data-prio="normal">Zwykłe</button>
-        <button class="pbtn ${ST.selPrio==='high'?'s':''}" data-prio="high">&#9733; Ważne</button>
+        <button class="pbtn s" id="rprio-normal">Zwykłe</button>
+        <button class="pbtn" id="rprio-high">&#9733; Ważne</button>
       </div>
       <button class="abtn" id="add-rec-btn">Dodaj zadanie cykliczne</button>
     </div>
   </div>`;
-  el.querySelector('#rov').addEventListener('click',e=>{if(e.target.id==='rov'){ST.recSheet=false;selDays=[];el.innerHTML='';render();}});
-  el.querySelector('#rclose').addEventListener('click',()=>{ST.recSheet=false;selDays=[];el.innerHTML='';render();});
+
+  buildRecList(el);
+
+  el.querySelector('#rov').addEventListener('click',e=>{if(e.target.id==='rov'){ST.recSheet=false;el.innerHTML='';render();}});
+  el.querySelector('#rclose').addEventListener('click',()=>{ST.recSheet=false;el.innerHTML='';render();});
+
   el.querySelectorAll('[data-rectype]').forEach(b=>b.addEventListener('click',()=>{
-    ST.selRecType=b.dataset.rectype;selDays=[];renderRecSheet();
+    localRecType=b.dataset.rectype;
+    el.querySelectorAll('[data-rectype]').forEach(x=>x.classList.remove('s'));
+    b.classList.add('s');
+    el.querySelector('#days-picker').style.display=localRecType==='week'?'flex':'none';
   }));
+
   el.querySelectorAll('[data-day]').forEach(b=>b.addEventListener('click',()=>{
-    const d=parseInt(b.dataset.day);const idx=selDays.indexOf(d);
-    if(idx>=0)selDays.splice(idx,1);else selDays.push(d);
-    b.classList.toggle('s',selDays.includes(d));
+    const d=parseInt(b.dataset.day);
+    const idx=localDays.indexOf(d);
+    if(idx>=0)localDays.splice(idx,1);else localDays.push(d);
+    b.classList.toggle('s',localDays.includes(d));
   }));
-  el.querySelectorAll('[data-prio]').forEach(b=>b.addEventListener('click',()=>{ST.selPrio=b.dataset.prio;renderRecSheet();}));
-  el.querySelectorAll('.delbtn[data-recid]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();deleteRec(b.dataset.recid);}));
-  el.querySelector('#add-rec-btn')?.addEventListener('click',()=>{
+
+  el.querySelector('#rprio-normal').addEventListener('click',()=>{
+    localPrio='normal';
+    el.querySelector('#rprio-normal').classList.add('s');
+    el.querySelector('#rprio-high').classList.remove('s');
+  });
+  el.querySelector('#rprio-high').addEventListener('click',()=>{
+    localPrio='high';
+    el.querySelector('#rprio-high').classList.add('s');
+    el.querySelector('#rprio-normal').classList.remove('s');
+  });
+
+  el.querySelector('#add-rec-btn').addEventListener('click',()=>{
     const name=el.querySelector('#rn').value.trim();
     const son=el.querySelector('#rson').value;
     const cat=el.querySelector('#rcat').value;
-    if(!name||!son)return;
-    if(ST.selRecType==='week'&&selDays.length===0)return;
-    addRec({id:'rec_'+Date.now(),name,son,category:cat||'other',priority:ST.selPrio,type:ST.selRecType,days:ST.selRecType==='week'?[...selDays]:null});
-    ST.selPrio='normal';selDays=[];renderRecSheet();render();
+    if(!name||!son){
+      if(!name)el.querySelector('#rn').style.borderColor='#E24B4A';
+      if(!son)el.querySelector('#rson').style.borderColor='#E24B4A';
+      return;
+    }
+    if(localRecType==='week'&&localDays.length===0){
+      el.querySelector('#days-picker').style.outline='1px solid #E24B4A';
+      return;
+    }
+    addRec({id:'rec_'+Date.now(),name,son,category:cat||'other',priority:localPrio,type:localRecType,days:localRecType==='week'?[...localDays]:null});
+    el.querySelector('#rn').value='';
+    el.querySelector('#rson').value='';
+    el.querySelector('#rcat').value='school';
+    el.querySelector('#rn').style.borderColor='';
+    el.querySelector('#rson').style.borderColor='';
+    localPrio='normal';localRecType='month';localDays=[];
+    el.querySelector('#rprio-normal').classList.add('s');
+    el.querySelector('#rprio-high').classList.remove('s');
+    el.querySelectorAll('[data-rectype]').forEach(x=>x.classList.remove('s'));
+    el.querySelector('[data-rectype="month"]').classList.add('s');
+    el.querySelectorAll('[data-day]').forEach(x=>x.classList.remove('s'));
+    el.querySelector('#days-picker').style.display='none';
+    buildRecList(el);
+    renderTopbar(calcStats());
+    renderScroll(calcStats());
   });
 }
 
