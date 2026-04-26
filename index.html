@@ -129,6 +129,8 @@ body{
 .chip-rec{border-left:2.5px solid rgba(0,0,0,0.18)}
 .task-chip:active{opacity:0.7}
 .more-b{font-size:10px;color:var(--text3);padding:1px 3px}
+.son-group{margin-bottom:4px}
+.son-group .task-chip{margin-bottom:2px}
 
 /* ── Week view ── */
 .week-section{border-top:0.5px solid var(--border);padding-top:8px;margin-bottom:6px}
@@ -410,10 +412,11 @@ function renderTopbar(stats){
   tb.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{ST.tab=b.dataset.tab;render();}));
   tb.querySelector('#rec-btn')?.addEventListener('click',()=>{ST.recSheet=true;renderRecSheet();});
   tb.querySelector('#wakelock-btn')?.addEventListener('click',()=>{
-    if(wakeLockEnabled)releaseWakeLock();else requestWakeLock();
+    renderWLSheet();
   });
   tb.querySelector('#do-install')?.addEventListener('click',()=>{if(deferredPrompt){deferredPrompt.prompt();deferredPrompt.userChoice.then(()=>{deferredPrompt=null;ST.showInstall=false;render();})}});
   tb.querySelector('#close-install')?.addEventListener('click',()=>{ST.showInstall=false;render();});
+  // synchronizuj stan przycisku z aktualnym stanem wake lock
   updateWakeLockBtn();
 }
 
@@ -458,19 +461,27 @@ function buildMonth(){
     const vis=fil.slice(0,3);const extra=fil.length-3;
     cells+=`<div class="day-cell${isT?' today':''}${we?' weekend-bg':''}" data-date="${dstr}">
       <div class="day-num">${d}${we?'<span class="we-tag">W</span>':''}</div>
-      ${vis.map(t=>{
-        const s=sonById(t.son);if(!s)return'';
-        return `<div class="task-block">
-          <div class="task-son-lbl" style="color:${s.color}">${s.name}</div>
-          <div class="task-chip ${s.cc}${t.done?' done':''}${t.isRec?' chip-rec':''}"
+      ${(()=>{
+        let html='';let lastSon=null;
+        vis.forEach(t=>{
+          const s=sonById(t.son);if(!s)return;
+          if(t.son!==lastSon){
+            if(lastSon!==null)html+=`</div>`;
+            html+=`<div class="son-group">`;
+            html+=`<div class="task-son-lbl" style="color:${s.color}">${s.name}</div>`;
+            lastSon=t.son;
+          }
+          html+=`<div class="task-chip ${s.cc}${t.done?' done':''}${t.isRec?' chip-rec':''}"
             data-date="${dstr}" data-taskson="${t.son}" data-taskname="${t.name}"
             data-isrec="${t.isRec?1:0}" data-recid="${t.id||''}">
             ${t.priority==='high'?'<span style="font-size:10px">&#9733;</span>':''}
             <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:62px">${t.name}</span>
             ${t.isRec?'<span style="font-size:9px;opacity:0.55">&#8635;</span>':''}
-          </div>
-        </div>`;
-      }).join('')}
+          </div>`;
+        });
+        if(lastSon!==null)html+=`</div>`;
+        return html;
+      })()}
       ${extra>0?`<div class="more-b">+${extra}</div>`:''}
     </div>`;
   }
@@ -557,16 +568,18 @@ function attachScrollEv(sa){
     if(e.target.closest('.task-chip')||e.target.closest('.task-block'))return;
     ST.sheet={date:el.dataset.date};renderSheet();
   }));
-  sa.querySelectorAll('.task-chip[data-date]').forEach(el=>el.addEventListener('click',e=>{
+  sa.querySelectorAll('.task-chip[data-date]').forEach(chip=>chip.addEventListener('click',e=>{
     e.stopPropagation();
-    const date=el.dataset.date;const isRec=el.dataset.isrec==='1';
-    if(isRec){
-      const rt=(ST.recTasks||[]).find(r=>r.id===el.dataset.recid);
-      if(rt)toggleTask(date,{...rt,isRec:true,done:!!(ST.tasks[date+'_rec_'+rt.id])});
-    } else {
-      const arr=ST.tasks[date]||[];const t=arr.find(t=>t.son===el.dataset.taskson&&t.name===el.dataset.taskname&&!t.isRec);
-      if(t){t.done=!t.done;save();render();}
-    }
+    const date=chip.dataset.date;const isRec=chip.dataset.isrec==='1';
+    showPinModal(()=>{
+      if(isRec){
+        const rt=(ST.recTasks||[]).find(r=>r.id===chip.dataset.recid);
+        if(rt)toggleTask(date,{...rt,isRec:true,done:!!(ST.tasks[date+'_rec_'+rt.id])});
+      } else {
+        const arr=ST.tasks[date]||[];const t=arr.find(t=>t.son===chip.dataset.taskson&&t.name===chip.dataset.taskname&&!t.isRec);
+        if(t){t.done=!t.done;save();render();}
+      }
+    });
   }));
 }
 
@@ -598,13 +611,19 @@ function refreshTaskList(el,date){
 }
 
 function attachTaskListEv(el,date){
-  el.querySelectorAll('.tchk').forEach(cb=>cb.addEventListener('change',()=>{
-    const isRec=cb.dataset.isrec==='1';
-    if(isRec){const rt=(ST.recTasks||[]).find(r=>r.id===cb.dataset.recid);if(rt)toggleTask(cb.dataset.date,{...rt,isRec:true,done:!cb.checked});}
-    else{const arr=ST.tasks[cb.dataset.date]||[];const t=arr.find(t=>t.son===cb.dataset.son&&t.name===cb.dataset.name&&!t.isRec);if(t){t.done=!t.done;save();}}
-    refreshTaskList(el,date);
-    renderTopbar(calcStats());
-  }));
+  el.querySelectorAll('.tchk').forEach(cb=>{
+    // blokuj natywną zmianę checkboxa — obsługujemy przez PIN
+    cb.addEventListener('click',e=>{
+      e.preventDefault();
+      const isRec=cb.dataset.isrec==='1';
+      showPinModal(()=>{
+        if(isRec){const rt=(ST.recTasks||[]).find(r=>r.id===cb.dataset.recid);if(rt)toggleTask(cb.dataset.date,{...rt,isRec:true,done:cb.checked});}
+        else{const arr=ST.tasks[cb.dataset.date]||[];const t=arr.find(t=>t.son===cb.dataset.son&&t.name===cb.dataset.name&&!t.isRec);if(t){t.done=!t.done;save();}}
+        refreshTaskList(el,date);
+        renderTopbar(calcStats());
+      });
+    });
+  });
   el.querySelectorAll('.dtsk').forEach(b=>b.addEventListener('click',e=>{
     e.stopPropagation();
     const arr=ST.tasks[b.dataset.date]||[];const t=arr.find(t=>t.son===b.dataset.son&&t.name===b.dataset.name);
@@ -832,18 +851,97 @@ if('serviceWorker' in navigator){
   navigator.serviceWorker.register('./sw.js').catch(()=>{});
 }
 
-// ── Wake Lock — keeps screen on ──
+// ── PIN — zabezpieczenie odznaczania zadań ──
+const TASK_PIN='2209';
+
+function showPinModal(onSuccess){
+  let el=document.getElementById('pin-modal-container');
+  if(!el){el=document.createElement('div');el.id='pin-modal-container';document.body.appendChild(el);}
+  let entered='';
+  const digits=[1,2,3,4,5,6,7,8,9,'C',0,'OK'];
+
+  function renderPin(){
+    const dots=Array.from({length:4},(_,i)=>
+      `<div style="width:14px;height:14px;border-radius:50%;background:${i<entered.length?'#185FA5':'var(--border2)'};border:1.5px solid ${i<entered.length?'#185FA5':'var(--border2)'};transition:background 0.15s"></div>`
+    ).join('');
+    el.innerHTML=`<div style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200;display:flex;align-items:center;justify-content:center">
+      <div style="background:var(--bg);border-radius:20px;padding:24px 20px;width:280px;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.3)">
+        <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:6px">Podaj PIN</div>
+        <div style="font-size:12px;color:var(--text2);margin-bottom:18px">Aby oznaczyć zadanie jako wykonane</div>
+        <div style="display:flex;justify-content:center;gap:12px;margin-bottom:20px">${dots}</div>
+        ${entered.length===4&&entered!==TASK_PIN?'<div style="font-size:12px;color:#E24B4A;margin-bottom:10px">Nieprawidłowy PIN</div>':''}
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+          ${digits.map(d=>`<button data-digit="${d}" style="
+            height:56px;border-radius:12px;border:0.5px solid var(--border2);
+            background:${d==='OK'?'#185FA5':d==='C'?'var(--bg3)':'var(--bg2)'};
+            color:${d==='OK'?'#fff':'var(--text)'};
+            font-size:${d==='OK'||d==='C'?'13px':'20px'};
+            font-weight:${d==='OK'?'600':'400'};
+            cursor:pointer;-webkit-tap-highlight-color:transparent;
+          ">${d==='C'?'&#9003;':d}</button>`).join('')}
+        </div>
+        <button id="pin-cancel" style="margin-top:14px;background:transparent;border:none;color:var(--text2);font-size:13px;cursor:pointer;padding:8px 20px;">Anuluj</button>
+      </div>
+    </div>`;
+
+    el.querySelectorAll('[data-digit]').forEach(b=>b.addEventListener('click',()=>{
+      const d=b.dataset.digit;
+      if(d==='C'){entered=entered.slice(0,-1);}
+      else if(d==='OK'){
+        if(entered===TASK_PIN){el.innerHTML='';onSuccess();}
+        else{entered='';renderPin();}
+        return;
+      } else {
+        if(entered.length<4)entered+=d;
+        if(entered.length===4){
+          if(entered===TASK_PIN){
+            setTimeout(()=>{el.innerHTML='';onSuccess();},120);
+            return;
+          } else {
+            setTimeout(()=>{entered='';renderPin();},400);
+          }
+        }
+      }
+      renderPin();
+    }));
+    el.querySelector('#pin-cancel')?.addEventListener('click',()=>{el.innerHTML='';});
+  }
+  renderPin();
+}
+
+// ── Wake Lock z harmonogramem godzinowym ──
 let wakeLock=null;
 let wakeLockEnabled=false;
+let wakeLockScheduleActive=true; // czy harmonogram jest włączony
+let wlScheduleInterval=null;
+
+// Wczytaj zapisane godziny lub użyj domyślnych (6:00–21:00)
+function loadWLSettings(){
+  try{
+    const s=localStorage.getItem('wl_settings');
+    return s?JSON.parse(s):{enabled:true,from:6,to:21};
+  }catch(e){return{enabled:true,from:6,to:21};}
+}
+function saveWLSettings(s){localStorage.setItem('wl_settings',JSON.stringify(s));}
+
+function isWithinSchedule(){
+  const s=loadWLSettings();
+  if(!s.enabled)return false;
+  const h=new Date().getHours();
+  return h>=s.from && h<s.to;
+}
 
 async function requestWakeLock(){
   if(!('wakeLock' in navigator))return;
+  if(!isWithinSchedule()){await releaseWakeLock();return;}
   try{
     wakeLock=await navigator.wakeLock.request('screen');
     wakeLockEnabled=true;
     updateWakeLockBtn();
     wakeLock.addEventListener('release',()=>{
-      if(wakeLockEnabled)requestWakeLock();
+      // system zwolnił blokadę (np. przy zmianie zakładki) — przywróć jeśli nadal w harmonogramie
+      if(isWithinSchedule())requestWakeLock();
+      else{wakeLockEnabled=false;updateWakeLockBtn();}
     });
   }catch(e){wakeLockEnabled=false;updateWakeLockBtn();}
 }
@@ -854,21 +952,165 @@ async function releaseWakeLock(){
   updateWakeLockBtn();
 }
 
+// Co minutę sprawdź czy jesteśmy w oknie czasowym
+function startWLScheduler(){
+  if(wlScheduleInterval)clearInterval(wlScheduleInterval);
+  wlScheduleInterval=setInterval(()=>{
+    if(isWithinSchedule()){
+      if(!wakeLockEnabled)requestWakeLock();
+    } else {
+      if(wakeLockEnabled)releaseWakeLock();
+    }
+  },60000); // co 60 sekund
+}
+
 function updateWakeLockBtn(){
   const btn=document.getElementById('wakelock-btn');
   if(!btn)return;
-  btn.textContent=wakeLockEnabled?'Ekran: wł.':'Ekran: auto';
-  btn.style.borderColor=wakeLockEnabled?'#3B6D11':'var(--border2)';
-  btn.style.color=wakeLockEnabled?'#3B6D11':'var(--text2)';
-  btn.style.background=wakeLockEnabled?'#EAF3DE':'transparent';
+  const s=loadWLSettings();
+  const inWindow=isWithinSchedule();
+  if(!s.enabled){
+    btn.textContent='Ekran: auto';
+    btn.style.borderColor='var(--border2)';
+    btn.style.color='var(--text2)';
+    btn.style.background='transparent';
+  } else if(wakeLockEnabled){
+    // Wake Lock aktywny — zielony
+    btn.textContent=`Ekran: wł. (${s.from}:00–${s.to}:00)`;
+    btn.style.borderColor='#3B6D11';
+    btn.style.color='#3B6D11';
+    btn.style.background='#EAF3DE';
+  } else if(inWindow){
+    // Jesteśmy w oknie czasowym ale Wake Lock jeszcze nie aktywny (np. brak wsparcia przeglądarki)
+    btn.textContent=`Ekran: wł. (${s.from}:00–${s.to}:00)`;
+    btn.style.borderColor='#3B6D11';
+    btn.style.color='#3B6D11';
+    btn.style.background='#EAF3DE';
+  } else {
+    // Poza oknem czasowym — szary
+    btn.textContent=`Ekran: auto (${s.from}:00–${s.to}:00)`;
+    btn.style.borderColor='var(--border2)';
+    btn.style.color='var(--text2)';
+    btn.style.background='transparent';
+  }
+}
+
+// Arkusz ustawień Wake Lock
+function renderWLSheet(){
+  let el=document.getElementById('wl-sheet-container');
+  if(!el){el=document.createElement('div');el.id='wl-sheet-container';document.body.appendChild(el);}
+  const s=loadWLSettings();
+  const hours=Array.from({length:25},(_,i)=>i); // 0..24
+  function hoursOpts(sel){
+    return hours.map(h=>`<option value="${h}"${h===sel?' selected':''}>${String(h).padStart(2,'0')}:00</option>`).join('');
+  }
+  const inWindow=isWithinSchedule();
+  el.innerHTML=`<div class="sheet-ov" id="wlov">
+    <div class="sheet">
+      <div class="sheet-handle"></div>
+      <button class="sheet-close" id="wlclose">&#215;</button>
+      <h3>Ustawienia ekranu</h3>
+      <div style="background:${wakeLockEnabled?'#EAF3DE':inWindow?'#FDF3E0':'var(--bg2)'};border-radius:var(--r);padding:12px 14px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
+        <span style="font-size:22px">${wakeLockEnabled?'🟢':inWindow?'🟡':'⚫'}</span>
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--text)">${wakeLockEnabled?'Ekran jest aktywnie utrzymywany':inWindow?'Poza oknem czasowym — ekran wygasi się normalnie':'Ekran wygasi się normalnie (poza harmonogramem)'}</div>
+          <div style="font-size:11px;color:var(--text2);margin-top:2px">Aktualna godzina: ${new Date().getHours()}:${String(new Date().getMinutes()).padStart(2,'0')}</div>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;padding:12px;background:var(--bg2);border-radius:var(--r)">
+        <div>
+          <div style="font-size:14px;font-weight:600;color:var(--text)">Harmonogram aktywny</div>
+          <div style="font-size:11px;color:var(--text2)">Ekran pozostaje włączony w wybranych godzinach</div>
+        </div>
+        <label style="position:relative;display:inline-block;width:48px;height:28px;flex-shrink:0">
+          <input type="checkbox" id="wl-enabled" ${s.enabled?'checked':''} style="opacity:0;width:0;height:0;position:absolute">
+          <span id="wl-toggle-track" style="position:absolute;inset:0;border-radius:14px;background:${s.enabled?'#185FA5':'var(--bg3)'};transition:background 0.2s;cursor:pointer">
+            <span style="position:absolute;top:3px;left:${s.enabled?'23px':'3px'};width:22px;height:22px;border-radius:50%;background:#fff;transition:left 0.2s;box-shadow:0 1px 4px rgba(0,0,0,0.3)"></span>
+          </span>
+        </label>
+      </div>
+
+      <div id="wl-time-section" style="display:${s.enabled?'block':'none'}">
+        <div class="form-lbl">Godziny aktywności ekranu</div>
+        <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;margin-bottom:16px">
+          <div>
+            <div style="font-size:11px;color:var(--text2);margin-bottom:4px">Od godziny</div>
+            <select id="wl-from" style="width:100%;padding:12px 8px;border:0.5px solid var(--border2);border-radius:var(--r);font-size:15px;background:var(--bg);color:var(--text);-webkit-appearance:none;text-align:center">
+              ${hoursOpts(s.from)}
+            </select>
+          </div>
+          <div style="font-size:18px;color:var(--text2);padding-top:18px">→</div>
+          <div>
+            <div style="font-size:11px;color:var(--text2);margin-bottom:4px">Do godziny</div>
+            <select id="wl-to" style="width:100%;padding:12px 8px;border:0.5px solid var(--border2);border-radius:var(--r);font-size:15px;background:var(--bg);color:var(--text);-webkit-appearance:none;text-align:center">
+              ${hoursOpts(s.to)}
+            </select>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--text2);background:var(--bg2);padding:10px 12px;border-radius:var(--r);margin-bottom:16px">
+          💡 Ekran będzie aktywny od <strong>${String(s.from).padStart(2,'0')}:00</strong> do <strong>${String(s.to).padStart(2,'0')}:00</strong>. W pozostałych godzinach wygasi się normalnie.
+        </div>
+      </div>
+
+      <button class="abtn" id="wl-save">Zapisz ustawienia</button>
+    </div>
+  </div>`;
+
+  // toggle switch
+  const chk=el.querySelector('#wl-enabled');
+  const track=el.querySelector('#wl-toggle-track');
+  const timeSection=el.querySelector('#wl-time-section');
+  chk.addEventListener('change',()=>{
+    const on=chk.checked;
+    track.style.background=on?'#185FA5':'var(--bg3)';
+    track.querySelector('span').style.left=on?'23px':'3px';
+    timeSection.style.display=on?'block':'none';
+  });
+
+  el.querySelector('#wlov').addEventListener('click',e=>{if(e.target.id==='wlov'){el.innerHTML='';}});
+  el.querySelector('#wlclose').addEventListener('click',()=>{el.innerHTML='';});
+
+  // live preview etykiety
+  const fromSel=el.querySelector('#wl-from');
+  const toSel=el.querySelector('#wl-to');
+  function updatePreview(){
+    const f=parseInt(fromSel.value);const t=parseInt(toSel.value);
+    const tip=el.querySelector('#wl-time-section div[style*="background:var(--bg2)"]');
+    if(tip)tip.innerHTML=`💡 Ekran będzie aktywny od <strong>${String(f).padStart(2,'0')}:00</strong> do <strong>${String(t).padStart(2,'0')}:00</strong>. W pozostałych godzinach wygasi się normalnie.`;
+  }
+  fromSel.addEventListener('change',updatePreview);
+  toSel.addEventListener('change',updatePreview);
+
+  el.querySelector('#wl-save').addEventListener('click',()=>{
+    const newSettings={
+      enabled:chk.checked,
+      from:parseInt(fromSel.value),
+      to:parseInt(toSel.value)
+    };
+    saveWLSettings(newSettings);
+    el.innerHTML='';
+    // zastosuj od razu
+    if(isWithinSchedule())requestWakeLock();
+    else releaseWakeLock();
+    updateWakeLockBtn();
+  });
 }
 
 document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='visible'&&wakeLockEnabled)requestWakeLock();
+  if(document.visibilityState==='visible'){
+    if(isWithinSchedule())requestWakeLock();
+    else releaseWakeLock();
+  }
 });
 
 render();
-requestWakeLock();
+startWLScheduler();
+// render() musi się wykonać przed requestWakeLock() — updateWakeLockBtn() szuka przycisku w DOM
+(async()=>{
+  await requestWakeLock();
+  updateWakeLockBtn();
+})();
 </script>
 </body>
 </html>
