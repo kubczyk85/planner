@@ -27,6 +27,7 @@ body{
   --border:rgba(0,0,0,0.11);--border2:rgba(0,0,0,0.2);
   --r:10px;--rl:14px;
   --touch:48px;
+  --day-today-bg:#EEF5FF;
 }
 @media(prefers-color-scheme:dark){
   body{background:#111}
@@ -34,6 +35,7 @@ body{
     --bg:#1c1c1e;--bg2:#2c2c2e;--bg3:#3a3a3c;
     --text:#f2f2f7;--text2:#aeaeb2;--text3:#636366;
     --border:rgba(255,255,255,0.1);--border2:rgba(255,255,255,0.2);
+    --day-today-bg:#0d2a4a;
   }
   .chip-j{background:#0C447C!important;color:#B5D4F4!important}
   .chip-a{background:#27500A!important;color:#C0DD97!important}
@@ -424,6 +426,7 @@ function renderScroll(stats){
   const sa=document.getElementById('scroll-area');
   if(ST.view==='month')sa.innerHTML=buildMonth();
   else if(ST.view==='week')sa.innerHTML=buildWeek();
+  else if(ST.view==='day')sa.innerHTML=buildDay();
   else sa.innerHTML=buildSummary(stats);
   attachScrollEv(sa);
 }
@@ -432,6 +435,7 @@ function renderBottomTabs(){
   const bt=document.getElementById('bottom-tabs');
   const tabs=[
     {id:'month',icon:'📅',label:'Miesiąc'},
+    {id:'day',icon:'📆',label:'Dzień'},
     {id:'week',icon:'📋',label:'Tydzień'},
     {id:'summary',icon:'📊',label:'Raport'},
     {id:'print',icon:'🖨️',label:'Drukuj'},
@@ -529,6 +533,83 @@ function buildWeek(){
   </div>`;
 }
 
+function buildDay(){
+  const td=todays();
+  const tdDate=new Date(td);
+  // Zbierz 4 dni: poprzedni, aktualny, +1, +2
+  const days=[-1,0,1,2].map(offset=>{
+    const d=new Date(tdDate);d.setDate(d.getDate()+offset);
+    const y=d.getFullYear(),m=d.getMonth(),day=d.getDate();
+    const dstr=ds(y,m,day);
+    const dow=(d.getDay()+6)%7; // 0=pon
+    return{dstr,y,m,day,dow,isToday:dstr===td};
+  });
+
+  const sons=ST.tab==='all'?SONS:SONS.filter(s=>s.id===ST.tab);
+  const COL_W='calc((100% - 72px) / 4)';
+
+  // Nagłówek kolumn
+  const headers=days.map(d=>`
+    <div style="
+      text-align:center;padding:6px 4px;
+      background:${d.isToday?'#185FA5':'var(--bg2)'};
+      border-radius:8px;
+      color:${d.isToday?'#fff':'var(--text2)'};
+      font-size:11px;font-weight:${d.isToday?'700':'500'};
+      border:${d.isToday?'none':'0.5px solid var(--border)'};
+    ">
+      <div>${DPL[d.dow]}</div>
+      <div style="font-size:13px;font-weight:700;margin-top:1px">${d.day} ${MPL[d.m].substring(0,3)}</div>
+    </div>
+  `).join('');
+
+  // Wiersze synów
+  const rows=sons.map(s=>`
+    <div style="display:grid;grid-template-columns:72px repeat(4,1fr);gap:4px;margin-bottom:4px;align-items:start">
+      <!-- imię syna -->
+      <div style="
+        display:flex;align-items:center;justify-content:flex-end;
+        padding:8px 6px 8px 0;font-size:13px;font-weight:600;
+        color:${s.color};min-height:52px;
+      ">${s.name}</div>
+      <!-- komórki dla każdego dnia -->
+      ${days.map(d=>{
+        const tasks=getTasks(d.dstr).filter(t=>t.son===s.id);
+        const sorted=tasks.slice().sort((a,b)=>a.done-b.done); // niewykonane na górze
+        return `<div style="
+          border:${d.isToday?'2px solid #185FA5':'0.5px solid var(--border)'};
+          border-radius:10px;
+          background:${d.isToday?'var(--day-today-bg)':'var(--bg)'};
+          padding:6px;min-height:52px;cursor:pointer;
+        " data-date="${d.dstr}">
+          ${sorted.length===0
+            ? `<div style="color:var(--border2);font-size:11px;text-align:center;padding:8px 0">—</div>`
+            : sorted.map(t=>`
+              <div class="task-chip ${s.cc}${t.done?' done':''}${t.isRec?' chip-rec':''}"
+                data-date="${d.dstr}" data-taskson="${t.son}" data-taskname="${t.name}"
+                data-isrec="${t.isRec?1:0}" data-recid="${t.id||''}"
+                style="margin-bottom:3px;font-size:11px">
+                ${t.priority==='high'?'<span style="font-size:10px">&#9733;</span>':''}
+                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${t.name}</span>
+                ${t.isRec?'<span style="font-size:9px;opacity:0.55">&#8635;</span>':''}
+              </div>`).join('')
+          }
+        </div>`;
+      }).join('')}
+    </div>
+  `).join('');
+
+  return `<div style="padding-bottom:8px">
+    <!-- nagłówek -->
+    <div style="display:grid;grid-template-columns:72px repeat(4,1fr);gap:4px;margin-bottom:6px">
+      <div></div>${headers}
+    </div>
+    <!-- separator -->
+    <div style="height:0.5px;background:var(--border);margin-bottom:8px"></div>
+    ${rows}
+  </div>`;
+}
+
 function buildSummary(stats){
   const sons=ST.tab==='all'?SONS:SONS.filter(s=>s.id===ST.tab);
   let html=sons.map(s=>{
@@ -564,8 +645,9 @@ function buildSummary(stats){
 }
 
 function attachScrollEv(sa){
-  sa.querySelectorAll('.day-cell[data-date],.wcell[data-date]').forEach(el=>el.addEventListener('click',e=>{
+  sa.querySelectorAll('.day-cell[data-date],.wcell[data-date],[data-date]').forEach(el=>el.addEventListener('click',e=>{
     if(e.target.closest('.task-chip')||e.target.closest('.task-block'))return;
+    if(!el.dataset.date)return;
     ST.sheet={date:el.dataset.date};renderSheet();
   }));
   sa.querySelectorAll('.task-chip[data-date]').forEach(chip=>chip.addEventListener('click',e=>{
