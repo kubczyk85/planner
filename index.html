@@ -994,8 +994,7 @@ function showPinModal(onSuccess){
 // ── Wake Lock z harmonogramem godzinowym ──
 let wakeLock=null;
 let wakeLockEnabled=false;
-let wakeLockScheduleActive=true; // czy harmonogram jest włączony
-let wlScheduleInterval=null;
+// _lastRenderedDate — śledzi datę ostatniego renderu, wykrywa zmianę dnia
 
 // Wczytaj zapisane godziny lub użyj domyślnych (6:00–21:00)
 function loadWLSettings(){
@@ -1032,18 +1031,6 @@ async function releaseWakeLock(){
   if(wakeLock){try{await wakeLock.release();}catch(e){}}
   wakeLock=null;wakeLockEnabled=false;
   updateWakeLockBtn();
-}
-
-// Co minutę sprawdź czy jesteśmy w oknie czasowym
-function startWLScheduler(){
-  if(wlScheduleInterval)clearInterval(wlScheduleInterval);
-  wlScheduleInterval=setInterval(()=>{
-    if(isWithinSchedule()){
-      if(!wakeLockEnabled)requestWakeLock();
-    } else {
-      if(wakeLockEnabled)releaseWakeLock();
-    }
-  },60000); // co 60 sekund
 }
 
 function updateWakeLockBtn(){
@@ -1179,17 +1166,43 @@ function renderWLSheet(){
   });
 }
 
+// ── Obsługa powrotu z tła / wygaszenia ekranu ──
+// To jest GŁÓWNY mechanizm — setInterval jest zamrażany przez Android w tle,
+// ale visibilitychange odpala się zawsze gdy użytkownik wraca do aplikacji.
 document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='visible'){
-    if(isWithinSchedule())requestWakeLock();
-    else releaseWakeLock();
+    onAppResume();
   }
 });
 
+// Odpala się przy każdym powrocie do aplikacji (odblokowanie ekranu, przełączenie zakładek)
+function onAppResume(){
+  const now=new Date();
+  const today=ds(now.getFullYear(),now.getMonth(),now.getDate());
+
+  // Odśwież widok jeśli zmienił się dzień (np. minęła północ)
+  if(ST._lastRenderedDate && ST._lastRenderedDate!==today){
+    ST.m=now.getMonth();
+    ST.y=now.getFullYear();
+    load();
+    render();
+  }
+  ST._lastRenderedDate=today;
+
+  // Zaktualizuj wake lock zgodnie z harmonogramem
+  if(isWithinSchedule()){
+    requestWakeLock();
+  } else {
+    releaseWakeLock();
+  }
+}
+
 render();
-startWLScheduler();
-// render() musi się wykonać przed requestWakeLock() — updateWakeLockBtn() szuka przycisku w DOM
+
+// Inicjalizuj po renderze (przycisk musi być w DOM)
 (async()=>{
+  const now=new Date();
+  ST._lastRenderedDate=ds(now.getFullYear(),now.getMonth(),now.getDate());
   await requestWakeLock();
   updateWakeLockBtn();
 })();
